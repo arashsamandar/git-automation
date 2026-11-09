@@ -1,10 +1,7 @@
-name: Build desktop applications
+name: Build Tauri App
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
@@ -12,81 +9,60 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: windows-x64
-            runner: windows-latest
-            bun_target: bun-windows-x64
-            sidecar: git-worker-x86_64-pc-windows-msvc.exe
-            rust_target: x86_64-pc-windows-msvc
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            name: linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-apple-silicon
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-intel
 
-          - name: linux-x64
-            runner: ubuntu-24.04
-            bun_target: bun-linux-x64
-            sidecar: git-worker-x86_64-unknown-linux-gnu
-            rust_target: x86_64-unknown-linux-gnu
-
-          - name: macos-arm64
-            runner: macos-26
-            bun_target: bun-darwin-arm64
-            sidecar: git-worker-aarch64-apple-darwin
-            rust_target: aarch64-apple-darwin
-
-          - name: macos-x64
-            runner: macos-26-intel
-            bun_target: bun-darwin-x64
-            sidecar: git-worker-x86_64-apple-darwin
-            rust_target: x86_64-apple-darwin
-
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Download source code
-        uses: actions/checkout@v7
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
+      - uses: actions/checkout@v4
 
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: Install JavaScript dependencies
-        run: bun install --frozen-lockfile
-      
-      - name:
-        run: mkdir -p src-tauri/binaries
-        shell: bash
-
-      - name: Compile JavaScript backend
-        run: >
-          bun build --compile
-          --target=${{ matrix.bun_target }}
-          backend/worker.js
-          --outfile=src-tauri/binaries/${{ matrix.sidecar }}
-
-      - name: Build complete Tauri application
-        run: bunx tauri build --target ${{ matrix.rust_target }}
-
-      - name: Save installers
-        uses: actions/upload-artifact@v7
+      - uses: actions/setup-node@v4
         with:
-          name: git-automation-${{ matrix.name }}
-          path: src-tauri/target/${{ matrix.rust_target }}/release/bundle/
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --target ${{ matrix.target }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.name }}
           if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
