@@ -1,0 +1,92 @@
+name: Build desktop applications
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-latest
+            bun_target: bun-windows-x64
+            sidecar: git-worker-x86_64-pc-windows-msvc.exe
+            rust_target: x86_64-pc-windows-msvc
+
+          - name: linux-x64
+            runner: ubuntu-24.04
+            bun_target: bun-linux-x64
+            sidecar: git-worker-x86_64-unknown-linux-gnu
+            rust_target: x86_64-unknown-linux-gnu
+
+          - name: macos-arm64
+            runner: macos-26
+            bun_target: bun-darwin-arm64
+            sidecar: git-worker-aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+
+          - name: macos-x64
+            runner: macos-26-intel
+            bun_target: bun-darwin-x64
+            sidecar: git-worker-x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Download source code
+        uses: actions/checkout@v7
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+      
+      - name:
+        run: mkdir -p src-tauri/binaries
+        shell: bash
+
+      - name: Compile JavaScript backend
+        run: >
+          bun build --compile
+          --target=${{ matrix.bun_target }}
+          backend/worker.js
+          --outfile=src-tauri/binaries/${{ matrix.sidecar }}
+
+      - name: Build complete Tauri application
+        run: bunx tauri build --target ${{ matrix.rust_target }}
+
+      - name: Save installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: git-automation-${{ matrix.name }}
+          path: src-tauri/target/${{ matrix.rust_target }}/release/bundle/
+          if-no-files-found: error
